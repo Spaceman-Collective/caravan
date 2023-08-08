@@ -27,6 +27,7 @@ pub mod caravan {
 
     // Create Vault
     pub fn create_vault(ctx: Context<CreateVault>, vault_id: u64) -> Result<()> {
+        ctx.accounts.vault.creator = ctx.accounts.payer.key();
         ctx.accounts.vault.vault_id = vault_id;
         ctx.accounts.vault.owner = ctx.accounts.payer.key();
         ctx.accounts.vault.is_frozen = false;
@@ -320,10 +321,119 @@ pub mod caravan {
 
     // Create Trade
     // Freezes Vault Withdraws
-    // Attach Vault to Trade
-    // Freezes Vault Withdraws
+    pub fn create_trade(ctx: Context<CreateTrade>, trade_id: u64) -> Result<()> {
+        ctx.accounts.trade.trade_id = trade_id;
+        ctx.accounts.trade.creator_key = ctx.accounts.payer.key();
+        ctx.accounts.trade.creator_vault_key = None;
+        ctx.accounts.trade.acceptor_key = None;
+        ctx.accounts.trade.acceptor_vault_key = None;
+        ctx.accounts.trade.creator_confirmed = false;
+        ctx.accounts.trade.acceptor_confirmed = false;
+        Ok(())
+    }
+
+    pub fn join_trade(ctx: Context<JoinTrade>) -> Result<()> {
+        if ctx.accounts.trade.acceptor_key == None {
+            ctx.accounts.trade.acceptor_key = Some(ctx.accounts.payer.key())
+        } else {
+            return err!(Errors::TradeFull);
+        }
+
+        Ok(())
+    }
+
+    // Attach vault to trade
+    pub fn attach_vault_to_trade(ctx: Context<AttachVault>) -> Result<()> {
+        if ctx.accounts.trade.creator_key == ctx.accounts.payer.key()
+            && !ctx.accounts.trade.creator_confirmed
+        {
+            // Can't change out vaults if you've confirmed
+            ctx.accounts.trade.creator_vault_key = Some(ctx.accounts.vault.key());
+            ctx.accounts.vault.is_frozen = true;
+            // If you haven't confirmed and you change out vaults, the other person's confirmation gets reset
+            ctx.accounts.trade.acceptor_confirmed = false;
+        } else if ctx.accounts.trade.acceptor_key == Some(ctx.accounts.payer.key())
+            && !ctx.accounts.trade.acceptor_confirmed
+        {
+            // Can't change out vaults if you've confirmed
+            ctx.accounts.trade.acceptor_vault_key = Some(ctx.accounts.vault.key());
+            ctx.accounts.vault.is_frozen = true;
+            // If you haven't confirmed and you change out vaults, the other person's confirmation gets reset
+            ctx.accounts.trade.creator_confirmed = false;
+        } else {
+            return err!(Errors::VaultAttachError);
+        }
+        Ok(())
+    }
+
+    // Lock trade
+    pub fn lock_trade(ctx: Context<LockTrade>) -> Result<()> {
+        if ctx.accounts.trade.creator_key == ctx.accounts.payer.key() {
+            ctx.accounts.trade.creator_confirmed = true;
+        } else if ctx.accounts.trade.acceptor_key == Some(ctx.accounts.payer.key()) {
+            ctx.accounts.trade.acceptor_confirmed = true;
+        } else {
+            return err!(Errors::VaultLockError);
+        }
+        Ok(())
+    }
+
     // Cancel Trade
-    // Accept Trade
+    pub fn cancel_trade(ctx: Context<CancelTrade>) -> Result<()> {
+        if ctx.accounts.trade.creator_key == ctx.accounts.payer.key() {
+            // If the creator wants to cancel, close the whole trade account
+            if ctx.accounts.trade.creator_vault_key.is_some()
+                && ctx.accounts.creator_vault.as_mut().unwrap().owner == ctx.accounts.payer.key()
+            {
+                ctx.accounts.creator_vault.as_mut().unwrap().is_frozen = false;
+            } else {
+                return err!(Errors::CancelTradeError);
+            }
+
+            if ctx.accounts.trade.acceptor_vault_key.is_some()
+                && ctx.accounts.acceptor_vault.as_mut().unwrap().owner
+                    == ctx.accounts.trade.acceptor_key.unwrap().key()
+            {
+                ctx.accounts.acceptor_vault.as_mut().unwrap().is_frozen = false;
+            } else {
+                return err!(Errors::CancelTradeError);
+            }
+
+            ctx.accounts
+                .trade
+                .close(ctx.accounts.payer.to_account_info())?;
+        } else if ctx.accounts.trade.acceptor_key == Some(ctx.accounts.payer.key()) {
+            // If the counterparty wants to cancel, just reset the counterparty
+            ctx.accounts.trade.acceptor_key = None;
+            ctx.accounts.trade.acceptor_vault_key = None;
+            ctx.accounts.trade.acceptor_confirmed = false;
+            ctx.accounts.acceptor_vault.as_mut().unwrap().is_frozen = false;
+        } else {
+            return err!(Errors::CancelTradeError);
+        }
+        Ok(())
+    }
+
+    // Confirm Trade
+    pub fn confirm_trade(ctx: Context<ConfirmTrade>) -> Result<()> {
+        // Checks:
+        //1. Confirm must be called by creator or acceptor
+        //2. Creator and Acceptor must both have locked
+        //3. Creator Vault and Accept vault must match those sent in
+
+        if (ctx.accounts.trade.creator_key != ctx.accounts.payer.key()
+            && ctx.accounts.trade.acceptor_key != Some(ctx.accounts.payer.key()))
+            || (!ctx.accounts.trade.creator_confirmed || !ctx.accounts.trade.acceptor_confirmed)
+            || (ctx.accounts.trade.creator_vault_key != Some(ctx.accounts.creator_vault.key()))
+            || (ctx.accounts.trade.acceptor_vault_key != Some(ctx.accounts.acceptor_vault.key()))
+        {
+            return err!(Errors::ConfirmTradeError);
+        }
+
+        ctx.accounts.creator_vault.owner = ctx.accounts.trade.acceptor_key.unwrap().key();
+        ctx.accounts.acceptor_vault.owner = ctx.accounts.trade.creator_key.key();
+        Ok(())
+    }
 }
 
 pub fn assert_decode_metadata<'info>(

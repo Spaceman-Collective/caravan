@@ -230,3 +230,71 @@ pub struct WithdrawSOL<'info>{
   pub rent_sysvar: Sysvar<'info, Rent>
 }
 
+#[derive(Accounts)]
+#[instruction(trade_id: u64)]
+pub struct CreateTrade<'info>{
+  #[account(mut)]
+  pub payer: Signer<'info>,
+  pub system_program: Program<'info, System>,
+
+  #[account(
+    init,
+    payer=payer,
+    seeds=[
+      b"trade",
+      payer.key().to_bytes().as_ref(),
+      trade_id.to_be_bytes().as_ref(),
+    ],
+    bump,
+    space=8+TradeAccount::get_size()
+  )]
+  pub trade: Account<'info, TradeAccount>
+}
+
+#[derive(Accounts)]
+pub struct JoinTrade<'info>{
+  pub payer: Signer<'info>,
+  #[account(mut)]
+  pub trade: Account<'info, TradeAccount>
+}
+
+#[derive(Accounts)]
+pub struct AttachVault<'info>{
+  pub payer: Signer<'info>,
+
+  #[account(mut)]
+  pub vault: Account<'info, Vault>,
+
+  #[account(mut)]
+  pub trade: Account<'info, TradeAccount>
+}
+
+#[derive(Accounts)]
+pub struct LockTrade<'info> {
+  pub payer: Signer<'info>,
+  #[account(mut)]
+  pub trade: Account<'info, TradeAccount>
+}
+
+#[derive(Accounts)]
+pub struct CancelTrade<'info> {
+  #[account(mut)]
+  pub payer: Signer<'info>,
+  #[account(mut)]
+  pub trade: Account<'info, TradeAccount>,
+  #[account(mut)]
+  pub creator_vault: Option<Account<'info, Vault>>,
+  #[account(mut)]
+  pub acceptor_vault: Option<Account<'info, Vault>>,
+}
+
+#[derive(Accounts)]
+pub struct ConfirmTrade<'info> {
+  pub payer: Signer<'info>,
+  #[account(mut)]
+  pub trade: Account<'info, TradeAccount>,
+  #[account(mut)]
+  pub creator_vault: Account<'info, Vault>,
+  #[account(mut)]
+  pub acceptor_vault: Account<'info, Vault>,
+}
